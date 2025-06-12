@@ -110,16 +110,14 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>) {
     // go in the order of the basis
     for (var basis_index: u32 = 0; basis_index < 64; basis_index++) {
         let pos_basis = ZZ_INDEX[basis_index];
-//        let pos_basis = 0;
 
         // used to accumulate the weight for the current basis iteration from the image block
         var basis_weight: f32 = 0.0;
 
-        var block_x_index: u32 = 0;
-        var block_y_index: u32 = 0;
-
         // go through each pixel in the block
+        var block_x_index: u32 = 0;
         for (var x: u32 = start.x; x < stop.x; x++) {
+            var block_y_index: u32 = 0;
             for (var y: u32 = start.y; y < stop.y; y++) {
                 let pos = vec2u(x, y);
 
@@ -127,17 +125,16 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>) {
                 var px: vec4f = textureLoad(tex_rgba, pos, 0);
 
                 // get luma value for this pixel
-                var luma: f32 = (0.299 * px.r + 0.587 * px.g + 0.114 * px.b);
+                var luma: f32 = (0.299 * px.r + 0.587 * px.g + 0.114 * px.b) * 255;
 
                 // JPEG DCT uses Hadamard multiply, so multiply the DCT at this basis at the corresponding pixel index
                 // textureLoad always returns vec4f32 even if it's just a 2D array
                 var dct_element: vec4<f32> = textureLoad(dct_basis, vec3u(block_x_index, block_y_index, basis_index), 0);
-                basis_weight += dct_element.r * luma;
-//                textureStore(tex_y_dct, start + pos_basis, vec4<f32>(basis_weight, 0, 0, 0));
+                basis_weight += dct_element[0] * luma;
 
-                block_x_index += 1;
+                block_y_index += 1;
             }
-            block_y_index += 1;
+            block_x_index += 1;
         }
 
         // store the weight in this basis for the block

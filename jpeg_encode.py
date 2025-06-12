@@ -73,7 +73,7 @@ iw.show()
 #%% run shader continously and update the imagewidget
 
 def run_shader():
-    with open("./rgb_to_ycbcr.wgsl", "r") as f:
+    with open("./jpeg_encode.wgsl", "r") as f:
         shader_src = f.read()
 
     shader_module = DEVICE.create_shader_module(code=shader_src)
