@@ -102,8 +102,10 @@ const QTABLE_MEDIUM_GRAY = array<f32, 64>(
     113, 77, 92, 120, 100, 103, 101, 99
 );
 
-
-const RGB_LUMA_WEIGHTS = vec4f(0.299, 0.587, 0.114, 0);
+// weights to convert from RGB -> YCbCr
+const LUMA_WEIGHTS = vec4f(0.299, 0.587, 0.114, 0);
+const CB_WEIGHTS = vec4f(-0.1687, -0.3313, 0.5, 0);
+const CR_WEIGHTS = vec4f(0.5, -0.4187, -0.0813, 0);
 
 
 @compute @workgroup_size(group_size_x, group_size_y)
@@ -139,10 +141,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>) {
                 // read array element i.e. "pixel" value
                 var pixel: vec4f = textureLoad(tex_rgba, pos_xy_img, 0);
 
-                // get luma value for this pixel, mean center and multiply by 255
-//                var luma: f32 = ((0.299 * pixel.r + 0.587 * pixel.g + 0.114 * pixel.b) - 0.5) * 255;
-
-                var luma: f32 = (dot(pixel, RGB_LUMA_WEIGHTS) - 0.5) * 255;
+                var luma: f32 = (dot(pixel, LUMA_WEIGHTS) - 0.5) * 255;
 
                 // JPEG DCT uses Hadamard multiply, so multiply the DCT at this basis at the corresponding pixel index
                 // textureLoad always returns vec4f32 even if it's just a 2D array
@@ -151,8 +150,8 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>) {
                     vec3u(x_block_index, y_block_index, basis_index),
                     0
                 );
-
-                basis_weight += (dct_element.r * luma) / QTABLE_MEDIUM_GRAY[basis_index];
+                // TODO: if luma and basis_weight are vectors, then is fma(dct_element, luma, basis_weight) faster??
+                basis_weight += (dct_element.r * luma);
 
                 y_block_index += 1;
             }
@@ -161,7 +160,11 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>) {
 
         // store the weight in this basis for the block
         // TODO: Quantize
-        textureStore(tex_y_dct, start + pos_xy_basis, vec4<f32>(basis_weight, 0, 0, 0));
+        textureStore(
+            tex_y_dct,
+            start + pos_xy_basis,
+            vec4<f32>(basis_weight / QTABLE_MEDIUM_GRAY[basis_index], 0, 0, 0)
+        );
     }
 
     // TODO: dct for chroma
@@ -174,8 +177,8 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>) {
             var px_sample: vec4f = textureSampleLevel(tex_rgba, chroma_sampler, coords_sample, 0.0);
 
             // create cb, cr channels
-            var cb: f32 = (-0.1687 * px_sample.r - 0.3313 * px_sample.g + 0.5 * px_sample.b) + 0.5;
-            var cr: f32 = (0.5 * px_sample.r - 0.4187 * px_sample.g - 0.0813 * px_sample.b) + 0.5;
+            var cb: f32 = dot(px_sample, CB_WEIGHTS) + 0.5;
+            var cr: f32 = dot(px_sample, CR_WEIGHTS) + 0.5;
             let pos_out: vec2u = vec2u(x_img_index / 2, y_img_index / 2);
             textureStore(tex_cbcr, pos_out.xy, vec4<f32>(cb, cr, 0, 0));
         }
