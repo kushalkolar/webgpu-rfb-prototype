@@ -1,5 +1,7 @@
 import numpy as np
 import fastplotlib as fpl
+from fastplotlib.ui import EdgeWindow
+from imgui_bundle import imgui
 import imageio.v3 as iio
 
 import wgpu
@@ -63,8 +65,8 @@ CbCr = texture_cbcr.read()
 iw = fpl.ImageWidget(
     [Y, CbCr[..., 0], CbCr[..., 1]],
     names=["Y", "Cb", "Cr"],
-    figure_shape=(1, 3),
-    figure_kwargs={"size": (1000, 400), "controller_ids": None},
+    figure_shape=(3, 1),
+    figure_kwargs={"size": (900, 1800), "controller_ids": None},
     cmap="viridis",
 )
 
@@ -118,5 +120,18 @@ def run_shader():
     iw.set_data([Y, CbCr[..., 0], CbCr[..., 1]])
 
 iw.figure.show_tooltips = True
+
+
+class GUI(EdgeWindow):
+    def __init__(self, figure, title="gui", size=150):
+        super().__init__(figure=figure, title=title, size=size, location="right")
+
+    def update(self):
+        if imgui.button("Rerun shader"):
+            run_shader()
+
+
+iw.figure.add_gui(GUI(iw.figure))
+
 run_shader()
 fpl.loop.run()
