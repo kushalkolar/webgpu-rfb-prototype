@@ -1,3 +1,4 @@
+from time import perf_counter
 import numpy as np
 import fastplotlib as fpl
 from fastplotlib.ui import EdgeWindow
@@ -7,7 +8,11 @@ import imageio.v3 as iio
 import wgpu
 from utils import Texture, DEVICE, make_bindings
 from jpeg_utils import block_size, dct_basis
+from pygfx.renderers.wgpu.shader.templating import apply_templating
 
+# print(fpl.enumerate_adapters()[2].summary)
+#
+# fpl.select_adapter(fpl.enumerate_adapters()[2])
 
 # get example image, add alpha channel of all ones
 image = iio.imread("imageio:astronaut.png")#[::4, ::4]
@@ -52,7 +57,7 @@ resources = [
     texture_y_dct.texture.create_view(),
     texture_cbcr.texture.create_view(),
     chroma_sampler,
-    texture_dct_basis.texture.create_view(),
+    # texture_dct_basis.texture.create_view(),
 ]
 
 bindings = make_bindings(resources)
@@ -72,40 +77,45 @@ iw = fpl.ImageWidget(
 
 iw.show()
 
-#%% run shader continously and update the imagewidget
+templating_values = {
+    "dct_basis": dct_basis
+}
+
+with open("./dct_templated.wgsl", "r") as f:
+    shader_src = f.read()
+
+composed_shader = apply_templating(shader_src, **templating_values)
+shader_module = DEVICE.create_shader_module(code=composed_shader)
+
+workgroup_size_constants = {
+    "group_size_x": block_size,
+    "group_size_y": block_size,
+}
+
+# create compute pipeline
+pipeline: wgpu.GPUComputePipeline = DEVICE.create_compute_pipeline(
+    layout=wgpu.AutoLayoutMode.auto,
+    compute={
+        "module": shader_module,
+        "entry_point": "main",
+        "constants": workgroup_size_constants,
+    },
+)
+
+
+# set layout
+layout = pipeline.get_bind_group_layout(0)
+bind_group = DEVICE.create_bind_group(layout=layout, entries=bindings)
+
+# make sure we have enough workgroups to process all blocks of the input image
+# each workgroup will process the pixels within one 8x8 block
+# the blocks are non-overlapping
+workgroups = np.ceil(np.asarray(image.shape[:2]) / block_size).astype(int)
+
 
 def run_shader():
-    with open("./jpeg_encode.wgsl", "r") as f:
-        shader_src = f.read()
-
-    shader_module = DEVICE.create_shader_module(code=shader_src)
-
-    workgroup_size_constants = {
-        "group_size_x": block_size,
-        "group_size_y": block_size,
-    }
-
-    # create compute pipeline
-    pipeline: wgpu.GPUComputePipeline = DEVICE.create_compute_pipeline(
-        layout=wgpu.AutoLayoutMode.auto,
-        compute={
-            "module": shader_module,
-            "entry_point": "main",
-            "constants": workgroup_size_constants,
-        },
-    )
-
-
-    # set layout
-    layout = pipeline.get_bind_group_layout(0)
-    bind_group = DEVICE.create_bind_group(layout=layout, entries=bindings)
-
-    # make sure we have enough workgroups to process all blocks of the input image
-    # each workgroup will process the pixels within one 8x8 block
-    # the blocks are non-overlapping
-    workgroups = np.ceil(np.asarray(image.shape[:2]) / block_size).astype(int)
-
     # encode, submit
+    t0 = perf_counter()
     command_encoder = DEVICE.create_command_encoder()
     compute_pass = command_encoder.begin_compute_pass()
     compute_pass.set_pipeline(pipeline)
@@ -113,6 +123,10 @@ def run_shader():
     compute_pass.dispatch_workgroups(*workgroups, 1)
     compute_pass.end()
     DEVICE.queue.submit([command_encoder.finish()])
+    DEVICE._poll_wait()  # wait for the GPU to finish
+    t1 = perf_counter()
+    what = f"Computing"
+    print(f"{what} took {(t1 - t0) * 1000:0.1f} ms")
 
     Y = texture_y_dct.read()
     CbCr = texture_cbcr.read()
