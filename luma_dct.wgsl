@@ -1,4 +1,5 @@
 // does 881 luma then one basis per z-direction workgroup
+// takes ~51 seconds on my AMD GPU
 
 @group(0) @binding(0)
 var tex_rgba: texture_2d<f32>;
