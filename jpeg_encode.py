@@ -4,30 +4,122 @@ import fastplotlib as fpl
 from fastplotlib.ui import EdgeWindow
 from imgui_bundle import imgui
 import imageio.v3 as iio
+from skimage.transform import rescale
 
 import wgpu
-from utils import Texture, DEVICE, make_bindings
+from utils import Texture, make_device, make_bindings
 from jpeg_utils import block_size, dct_basis
 from pygfx.renderers.wgpu.shader.templating import apply_templating
 
-# print(fpl.enumerate_adapters()[2].summary)
+DEVICE = make_device(2)
 #
-# fpl.select_adapter(fpl.enumerate_adapters()[2])
+# adapter_ix = 0
+# # adapter_ix = 2
+#
+# print(fpl.enumerate_adapters()[adapter_ix].summary)
+#
+# fpl.select_adapter(fpl.enumerate_adapters()[adapter_ix])
 
 # get example image, add alpha channel of all ones
 image = iio.imread("imageio:astronaut.png")#[::4, ::4]
+
+RIF = 6
+
+image = rescale(image, scale=(RIF, RIF, 1), preserve_range=True)
 image_rgba = np.zeros((*image.shape[:-1], 4), dtype=np.uint8)
 image_rgba[..., :-1] = image
 image_rgba[..., -1] = 255
 
-#%% setup textures
+
+class ComputePass:
+    def __init__(self, name, bind_group, pipeline, workgroups):
+        self.name = name
+        self.bind_group = bind_group
+        self.pipeline = pipeline
+        self.workgroups = workgroups
+
+
+class MultiPass:
+    def __init__(self):
+        self.steps = list()
+
+    def add(
+        self,
+        name: str,
+        resources: list,
+        shader_path: str,
+        workgroups: tuple[int, int, int],
+        templating_values: dict = None,
+    ):
+        bindings = make_bindings(resources)
+
+        with open(shader_path, "r") as f:
+            shader_src = f.read()
+
+        if templating_values is None:
+            templating_values = dict()
+
+        composed_shader = apply_templating(shader_src, **templating_values)
+        shader_module = DEVICE.create_shader_module(code=composed_shader)
+
+        # create compute pipeline
+        pipeline: wgpu.GPUComputePipeline = DEVICE.create_compute_pipeline(
+            layout=wgpu.AutoLayoutMode.auto,
+            compute={
+                "module": shader_module,
+                "entry_point": "main",
+            },
+        )
+
+        # set layout
+        layout = pipeline.get_bind_group_layout(0)
+        bind_group = DEVICE.create_bind_group(layout=layout, entries=bindings)
+
+        compute_pass = ComputePass(
+            name,
+            bind_group,
+            pipeline,
+            workgroups,
+        )
+
+        self.steps.append(compute_pass)
+
+
+    def execute_all(self):
+        t0 = perf_counter()
+        command_encoder = DEVICE.create_command_encoder()
+
+        for step in self.steps:
+            compute_pass = command_encoder.begin_compute_pass()
+            compute_pass.set_pipeline(step.pipeline)
+            compute_pass.set_bind_group(0, step.bind_group)
+            compute_pass.dispatch_workgroups(*step.workgroups)
+
+            compute_pass.end()
+
+        DEVICE.queue.submit([command_encoder.finish()])
+        DEVICE._poll_wait()  # wait for the GPU to finish
+        t1 = perf_counter()
+        print(f"Compute took {(t1 - t0) * 1000:0.3f} ms")
+
+
+# %% setup textures
 texture_rgba = Texture(image_rgba, label="rgba_input", usage="read")
+
+texture_y = Texture(
+    image.shape[:2],
+    label="y",
+    usage="read-write",
+    format=wgpu.TextureFormat.r32float,
+)
+
 texture_y_dct = Texture(
     image.shape[:2],
     label="y",
     usage="write",
     format=wgpu.TextureFormat.r32float,
 )
+
 
 texture_cbcr = Texture(
     image[::2, ::2, :2].shape,
@@ -52,15 +144,20 @@ texture_dct_basis = Texture(
     format=wgpu.TextureFormat.r32float,
 )
 
-resources = [
+resources_to_ycbcr = [
     texture_rgba.texture.create_view(),
-    texture_y_dct.texture.create_view(),
-    texture_cbcr.texture.create_view(),
-    chroma_sampler,
-    # texture_dct_basis.texture.create_view(),
+    texture_y.texture.create_view(),
+    # texture_cbcr.texture.create_view(),
+    # chroma_sampler,
 ]
 
-bindings = make_bindings(resources)
+resources_dct = [
+    # texture_rgba.texture.create_view(),
+    texture_y.texture.create_view(format=wgpu.TextureFormat.r32float),
+    texture_y_dct.texture.create_view(),
+    # texture_cbcr.texture.create_view(),
+    # chroma_sampler,
+]
 
 #%% visualization
 
@@ -77,58 +174,43 @@ iw = fpl.ImageWidget(
 
 iw.show()
 
-templating_values = {
+templating_dct_step = {
     "dct_basis": dct_basis
 }
 
-with open("./dct_templated.wgsl", "r") as f:
-    shader_src = f.read()
+multi_pass = MultiPass()
 
-composed_shader = apply_templating(shader_src, **templating_values)
-shader_module = DEVICE.create_shader_module(code=composed_shader)
-
-workgroup_size_constants = {
-    "group_size_x": block_size,
-    "group_size_y": block_size,
-}
-
-# create compute pipeline
-pipeline: wgpu.GPUComputePipeline = DEVICE.create_compute_pipeline(
-    layout=wgpu.AutoLayoutMode.auto,
-    compute={
-        "module": shader_module,
-        "entry_point": "main",
-        "constants": workgroup_size_constants,
-    },
+multi_pass.add(
+    name="ycbcr",
+    resources=resources_to_ycbcr,
+    shader_path="./luma_dct.wgsl",
+    workgroups=(
+        int(64 * RIF),
+        int(64 * RIF),
+        64
+    ),
+    templating_values=templating_dct_step,
 )
 
+# multi_pass.add(
+#     name="dct",
+#     resources=resources_dct,
+#     shader_path="./dct_only.wgsl",
+#     templating_values=templating_dct_step,
+#     workgroups=(
+#         # we still want to do in 8x8 blocks, but each workgroup will have 64 local invocations
+#         int(64 * RIF),
+#         int(64 * RIF),
+#         1,
+#     )
+# )
 
-# set layout
-layout = pipeline.get_bind_group_layout(0)
-bind_group = DEVICE.create_bind_group(layout=layout, entries=bindings)
-
-# make sure we have enough workgroups to process all blocks of the input image
-# each workgroup will process the pixels within one 8x8 block
-# the blocks are non-overlapping
-workgroups = np.ceil(np.asarray(image.shape[:2]) / block_size).astype(int)
 
 
 def run_shader():
-    # encode, submit
-    t0 = perf_counter()
-    command_encoder = DEVICE.create_command_encoder()
-    compute_pass = command_encoder.begin_compute_pass()
-    compute_pass.set_pipeline(pipeline)
-    compute_pass.set_bind_group(0, bind_group)
-    compute_pass.dispatch_workgroups(*workgroups, 1)
-    compute_pass.end()
-    DEVICE.queue.submit([command_encoder.finish()])
-    DEVICE._poll_wait()  # wait for the GPU to finish
-    t1 = perf_counter()
-    what = f"Computing"
-    print(f"{what} took {(t1 - t0) * 1000:0.1f} ms")
+    multi_pass.execute_all()
 
-    Y = texture_y_dct.read()
+    Y = texture_y.read()
     CbCr = texture_cbcr.read()
 
     iw.set_data([Y, CbCr[..., 0], CbCr[..., 1]])
