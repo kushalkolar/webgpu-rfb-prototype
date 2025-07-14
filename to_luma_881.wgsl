@@ -1,8 +1,10 @@
+// This is the 2nd fastest and takes ~4ms on my AMD GPU
+
 @group(0) @binding(0)
 var tex_rgba: texture_2d<f32>;
 
 @group(0) @binding(1)
-var tex_y_dct: texture_storage_2d<r32float, write>;
+var tex_y: texture_storage_2d<r32float, write>;
 
 // weights to convert from RGB -> YCbCr
 const LUMA_WEIGHTS = vec4f(0.299, 0.587, 0.114, 0);

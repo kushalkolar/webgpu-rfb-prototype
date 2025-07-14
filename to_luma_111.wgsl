@@ -1,3 +1,6 @@
+// This is the slowest and takes ~10.5ms on my AMD GPU
+
+
 @group(0) @binding(0)
 var tex_rgba: texture_2d<f32>;
 
