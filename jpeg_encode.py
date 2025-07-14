@@ -4,18 +4,26 @@ import fastplotlib as fpl
 from fastplotlib.ui import EdgeWindow
 from imgui_bundle import imgui
 import imageio.v3 as iio
+from skimage.transform import rescale
 
 import wgpu
 from utils import Texture, DEVICE, make_bindings
 from jpeg_utils import block_size, dct_basis
 from pygfx.renderers.wgpu.shader.templating import apply_templating
 
-# print(fpl.enumerate_adapters()[2].summary)
-#
-# fpl.select_adapter(fpl.enumerate_adapters()[2])
+adapter_ix = 0
+# adapter_ix = 2
+
+print(fpl.enumerate_adapters()[adapter_ix].summary)
+
+fpl.select_adapter(fpl.enumerate_adapters()[adapter_ix])
 
 # get example image, add alpha channel of all ones
 image = iio.imread("imageio:astronaut.png")#[::4, ::4]
+
+RIF = 6
+
+image = rescale(image, scale=(RIF, RIF, 1), preserve_range=True)
 image_rgba = np.zeros((*image.shape[:-1], 4), dtype=np.uint8)
 image_rgba[..., :-1] = image
 image_rgba[..., -1] = 255
@@ -55,8 +63,8 @@ texture_dct_basis = Texture(
 resources = [
     texture_rgba.texture.create_view(),
     texture_y_dct.texture.create_view(),
-    texture_cbcr.texture.create_view(),
-    chroma_sampler,
+    # texture_cbcr.texture.create_view(),
+    # chroma_sampler,
     # texture_dct_basis.texture.create_view(),
 ]
 
@@ -78,13 +86,14 @@ iw = fpl.ImageWidget(
 iw.show()
 
 templating_values = {
-    "dct_basis": dct_basis
+    # "dct_basis": dct_basis
 }
 
-with open("./dct_templated.wgsl", "r") as f:
+with open("./to_luma_881.wgsl", "r") as f:
     shader_src = f.read()
 
 composed_shader = apply_templating(shader_src, **templating_values)
+print(composed_shader)
 shader_module = DEVICE.create_shader_module(code=composed_shader)
 
 workgroup_size_constants = {
@@ -117,16 +126,30 @@ def run_shader():
     # encode, submit
     t0 = perf_counter()
     command_encoder = DEVICE.create_command_encoder()
+
     compute_pass = command_encoder.begin_compute_pass()
     compute_pass.set_pipeline(pipeline)
     compute_pass.set_bind_group(0, bind_group)
-    compute_pass.dispatch_workgroups(*workgroups, 1)
+    compute_pass.dispatch_workgroups(
+        int((64 * RIF)),
+        int((64 * RIF))
+        , 1
+    )
+
     compute_pass.end()
+    #
+    # compute_pass2 = command_encoder.begin_compute_pass()
+    # compute_pass2.set_pipeline(pipeline)
+    # compute_pass2.set_bind_group(0, bind_group)
+    # compute_pass2.dispatch_workgroups(int((64 * RIF)), int((64 * RIF)), 1)
+    #
+    # compute_pass2.end()
+
     DEVICE.queue.submit([command_encoder.finish()])
     DEVICE._poll_wait()  # wait for the GPU to finish
     t1 = perf_counter()
     what = f"Computing"
-    print(f"{what} took {(t1 - t0) * 1000:0.1f} ms")
+    print(f"{what} took {(t1 - t0) * 1000:0.3f} ms")
 
     Y = texture_y_dct.read()
     CbCr = texture_cbcr.read()
