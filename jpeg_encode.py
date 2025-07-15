@@ -76,9 +76,7 @@ class MultiPass:
 
         self.steps.append(compute_pass)
 
-
     def execute_all(self):
-        t0 = perf_counter()
         command_encoder = DEVICE.create_command_encoder()
 
         for step in self.steps:
@@ -91,8 +89,19 @@ class MultiPass:
 
         DEVICE.queue.submit([command_encoder.finish()])
         DEVICE._poll_wait()  # wait for the GPU to finish
-        t1 = perf_counter()
-        print(f"Compute took {(t1 - t0) * 1000:0.3f} ms")
+        
+    def run_stats(self, n: int = 1_000):
+        timings = np.zeros(n)
+        
+        for i in range(n):
+            t0 = perf_counter()
+            
+            self.execute_all()
+            
+            timings[i] = perf_counter() - t0
+        
+        timings *= 1000
+        return timings
 
 
 # %% setup textures
