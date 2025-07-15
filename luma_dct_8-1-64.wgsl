@@ -104,24 +104,33 @@ const QTABLE_MEDIUM_GRAY = array<f32, 64>(
     113, 77, 92, 120, 100, 103, 101, 99
 );
 
-// luma available in workgroup memory, required by all 64 basis invocations
-var<workgroup> wg_luma: array<array<f32, 8>, 8>;
-
 // private var for current basis invocation
-var<private> current_weight: f32 = 0.0;
+ var<private> current_weight: f32 = 0.0;
+
+// weights across x is 8 * 64 = 16384 bytes which fits in wg memory
+var<workgroup> weights_across_y: array<array<f32, 8>, 64>;
 
 @compute @workgroup_size(8, 1, 64)
 fn main(
     @builtin(workgroup_id) wid: vec3<u32>,
     @builtin(local_invocation_id) lid : vec3<u32>
     ) {
+        // block start position, top left corner
         let start = wid.xy * vec2u(8, 8);
         
-        var pos_load: vec2u;
-        var rgba_val: vec4f;
+        var pos_load: vec2u;  // xy position to load rgba pixel
+        var rgba_val: vec4f;  // rgba pixel value
         
+        var luma: f32;  // luma value of pixel
+        
+        let basis_index = lid.z;  // DCT basis index
+        
+        // initialize to zero, apparently this is
+        weights_across_y[basis_index][lid.x] = 0.0;
+        
+        // in this x-invocation, go through every pixel in y
+        // also sum up DCT weights for this basis along the y direction
         $$ for y_i in range(8)
-            // store the luma in the workgroup memory
             pos_load = start + vec2u(lid.x, {{ y_i }});
             
             rgba_val = textureLoad(
@@ -130,46 +139,43 @@ fn main(
                 0
             );
             
-            wg_luma[lid.x][{{ y_i }}] = (dot(rgba_val, LUMA_WEIGHTS) - 0.5) * 255;
+            // convert to luma
+            luma = (dot(rgba_val, LUMA_WEIGHTS) - 0.5) * 255;
+            
+            // weight for this x invocation, sum up across all y
+            weights_across_y[basis_index][lid.x] += DCT_BASIS[basis_index][lid.x][{{ y_i }}] * luma;
+            
+            // need to benchmark if fma is faster
+            //weights_across_y[basis_index][lid.x] = fma(
+            //    DCT_BASIS[basis_index][lid.x][{{ y_i }}], 
+            //    luma, 
+            //    weights_across_y[basis_index][lid.x]
+            //);
+            
         $$ endfor
 
-        // block until all luma values have been written for this block
+        // block until all weights across y have been written
         workgroupBarrier();
 
         // we no longer need 8 invocations along x
         if lid.x > 0 {
             return;
         }
-
-        let basis_index = lid.z;
         
-        // seems like there is no performance difference if we do this or a private location invocation var
-//        var current_weight: f32 = 0.0;
+        // sum up weights across separate x-direction invocations
+        $$ for x in range(8)
+            current_weight += weights_across_y[basis_index][{{ x }}];
+        $$ endfor
         
-        // not difference if I also unroll the outer x loop
-        for (var x: u32 = 0; x < 8; x++) {
-          $$ for y in range(8)
-            //for (var y: u32 = 0; y < 8; y++) {
-//                current_weight += DCT_BASIS[basis_index][x][y] * wg_luma[x][y];
-                // should benchmark if fma is faster
-             //current_weight = fma(DCT_BASIS[basis_index][x][y], wg_luma[x][y], current_weight);
-     // {#      current_weight = fma(DCT_BASIS[basis_index][x][{{ y }}], wg_luma[x][{{ y }}], current_weight); #}
-               current_weight += DCT_BASIS[basis_index][x][{{ y }}] * wg_luma[x][{{ y }}];
-// {#           current_weight[chunk_index] += DCT_BASIS[basis_index][{{ x }}][{{ y }}] * wg_luma[{{ x }}][{{ y }}];   #}
-          $$ endfor
-            //}
-        }
-
+        // quantize
         let value: f32 = current_weight / QTABLE_MEDIUM_GRAY[basis_index];
-
-//        if abs(value) > 1.0 {
-
+        
         let pos_dct_output = vec2u((wid.x * 8) + ZZ_INDEX[basis_index].x, (wid.y * 8) + ZZ_INDEX[basis_index].y);
-
-            textureStore(
-                tex_y,
-                pos_dct_output,
-                vec4<f32>(current_weight, 0, 0, 0)
-            );
-//        }
+        
+        // store DCT output
+        textureStore(
+            tex_y,
+            pos_dct_output,
+            vec4<f32>(current_weight, 0, 0, 0)
+        );
 }
