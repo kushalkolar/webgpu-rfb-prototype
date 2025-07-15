@@ -1,6 +1,3 @@
-// does 881 luma then one basis per z-direction workgroup
-// takes ~51 seconds on my AMD GPU
-
 @group(0) @binding(0)
 var tex_rgba: texture_2d<f32>;
 
@@ -110,6 +107,13 @@ const QTABLE_MEDIUM_GRAY = array<f32, 64>(
 // weights across x is 8 * 64 = 16384 bytes which fits in wg memory
 var<workgroup> weights_across_y: array<array<f32, 8>, 64>;
 
+/*
+Each workgroup computes DCT weights for one 8x8 image block
+Individual invocations across x direction to convert rgba to luma
+Simultaneously the basis weights along y are summed up for the given x-direction invocation
+And then we sum up the weights across the x direction invocations to get the final 
+DCT weight for the given basis invocation.
+*/
 @compute @workgroup_size(8, 1, 64)
 fn main(
     @builtin(workgroup_id) wid: vec3<u32>,
@@ -163,6 +167,7 @@ fn main(
         }
         
         // sum up weights across separate x-direction invocations
+        // doesn't seem like there's much of a difference if this loop isn't unrolled, need to do proper benchmark
         $$ for x in range(8)
             current_weight += weights_across_y[basis_index][{{ x }}];
         $$ endfor
