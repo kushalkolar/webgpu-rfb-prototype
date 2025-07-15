@@ -11,16 +11,8 @@ from utils import Texture, make_device, make_bindings
 from jpeg_utils import block_size, dct_basis
 from pygfx.renderers.wgpu.shader.templating import apply_templating
 
-DEVICE = make_device(2)
-#
-# adapter_ix = 0
-# # adapter_ix = 2
-#
-# print(fpl.enumerate_adapters()[adapter_ix].summary)
-#
-# fpl.select_adapter(fpl.enumerate_adapters()[adapter_ix])
+DEVICE = make_device(0)
 
-# get example image, add alpha channel of all ones
 image = iio.imread("imageio:astronaut.png")#[::4, ::4]
 
 RIF = 6
@@ -109,7 +101,7 @@ texture_rgba = Texture(image_rgba, label="rgba_input", usage="read")
 texture_y = Texture(
     image.shape[:2],
     label="y",
-    usage="read-write",
+    usage="write",
     format=wgpu.TextureFormat.r32float,
 )
 
@@ -168,47 +160,40 @@ iw = fpl.ImageWidget(
     [Y, CbCr[..., 0], CbCr[..., 1]],
     names=["Y", "Cb", "Cr"],
     figure_shape=(3, 1),
-    figure_kwargs={"size": (900, 1800), "controller_ids": None},
+    figure_kwargs={"size": (900, 1800), "controller_ids": None, "canvas": "qt"},
     cmap="viridis",
 )
 
 iw.show()
 
-templating_dct_step = {
-    "dct_basis": dct_basis
-}
+MULTIPASS: MultiPass = None
 
-multi_pass = MultiPass()
+#%%
 
-multi_pass.add(
-    name="ycbcr",
-    resources=resources_to_ycbcr,
-    shader_path="./luma_dct.wgsl",
-    workgroups=(
-        int(64 * RIF),
-        int(64 * RIF),
-        64
-    ),
-    templating_values=templating_dct_step,
+def create_multipass(shader_path, workgroups):
+    templating_dct_step = {"dct_basis": dct_basis}
+
+    global MULTIPASS
+
+    MULTIPASS = MultiPass()
+
+    MULTIPASS.add(
+        name="ycbcr",
+        resources=resources_to_ycbcr,
+        shader_path=shader_path,
+        workgroups=workgroups,
+        templating_values=templating_dct_step,
+    )
+
+create_multipass(
+    "./luma_dct_8-1-64.wgsl",
+    workgroups=(int(64 * RIF), int(64 * RIF), 64)
 )
-
-# multi_pass.add(
-#     name="dct",
-#     resources=resources_dct,
-#     shader_path="./dct_only.wgsl",
-#     templating_values=templating_dct_step,
-#     workgroups=(
-#         # we still want to do in 8x8 blocks, but each workgroup will have 64 local invocations
-#         int(64 * RIF),
-#         int(64 * RIF),
-#         1,
-#     )
-# )
-
 
 
 def run_shader():
-    multi_pass.execute_all()
+    global MULTIPASS
+    MULTIPASS.execute_all()
 
     Y = texture_y.read()
     CbCr = texture_cbcr.read()
