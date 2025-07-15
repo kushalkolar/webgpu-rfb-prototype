@@ -104,8 +104,10 @@ const QTABLE_MEDIUM_GRAY = array<f32, 64>(
     113, 77, 92, 120, 100, 103, 101, 99
 );
 
-
+// luma available in workgroup memory, required by all 64 basis invocations
 var<workgroup> wg_luma: array<array<f32, 8>, 8>;
+
+// private var for current basis invocation
 var<private> current_weight: f32 = 0.0;
 
 @compute @workgroup_size(8, 1, 64)
@@ -140,9 +142,11 @@ fn main(
         }
 
         let basis_index = lid.z;
+        
         // seems like there is no performance difference if we do this or a private location invocation var
 //        var current_weight: f32 = 0.0;
-
+        
+        // not difference if I also unroll the outer x loop
         for (var x: u32 = 0; x < 8; x++) {
           $$ for y in range(8)
             //for (var y: u32 = 0; y < 8; y++) {

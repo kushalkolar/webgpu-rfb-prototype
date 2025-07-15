@@ -187,7 +187,7 @@ def create_multipass(shader_path, workgroups):
 
 create_multipass(
     "./luma_dct_8-1-64.wgsl",
-    workgroups=(int(64 * RIF), int(64 * RIF), 64)
+    workgroups=(int(64 * RIF), int(64 * RIF), 1)
 )
 
 
