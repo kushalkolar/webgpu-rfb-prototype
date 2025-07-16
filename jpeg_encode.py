@@ -7,15 +7,15 @@ import imageio.v3 as iio
 from skimage.transform import rescale
 
 import wgpu
-from utils import Texture, make_device, make_bindings
+from utils import Texture, StorageBuffer, make_device, make_bindings
 from jpeg_utils import block_size, dct_basis
 from pygfx.renderers.wgpu.shader.templating import apply_templating
 
-DEVICE = make_device(0)
+DEVICE = make_device(2)
 
 image = iio.imread("imageio:astronaut.png")#[::4, ::4]
 
-RIF = 6
+RIF = 1
 
 image = rescale(image, scale=(RIF, RIF, 1), preserve_range=True)
 image_rgba = np.zeros((*image.shape[:-1], 4), dtype=np.uint8)
@@ -145,17 +145,14 @@ texture_dct_basis = Texture(
     format=wgpu.TextureFormat.r32float,
 )
 
-resources_to_ycbcr = [
-    texture_rgba.texture.create_view(),
-    texture_y.texture.create_view(),
-    # texture_cbcr.texture.create_view(),
-    # chroma_sampler,
-]
 
-resources_dct = [
-    # texture_rgba.texture.create_view(),
-    texture_y.texture.create_view(format=wgpu.TextureFormat.r32float),
-    texture_y_dct.texture.create_view(),
+dct_buffer = StorageBuffer(dct_basis)
+
+
+resources_to_ycbcr = [
+    texture_rgba,
+    texture_y,
+    # dct_buffer,
     # texture_cbcr.texture.create_view(),
     # chroma_sampler,
 ]
@@ -195,7 +192,7 @@ def create_multipass(shader_path, workgroups):
     )
 
 create_multipass(
-    "./luma_dct_8-1-64.wgsl",
+    "./aan_dct2.wgsl",
     workgroups=(int(64 * RIF), int(64 * RIF), 1)
 )
 
@@ -225,3 +222,9 @@ iw.figure.add_gui(GUI(iw.figure))
 
 run_shader()
 fpl.loop.run()
+
+stats = MULTIPASS.run_stats(n=2000)
+# print("nvidia RTX 3080, 8k")
+# print("nvidia RTX 3080, 4k")
+print(f"\tmean: {stats.mean():0.3f} ms")
+print(f"\tmedian: {np.median(stats):0.3f} ms")
