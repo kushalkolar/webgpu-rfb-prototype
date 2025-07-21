@@ -1,10 +1,23 @@
-// based on the C++ example here: https://unix4lyfe.org/dct-1d/
+// DCT based on the C++ example here: https://unix4lyfe.org/dct-1d/
 
 @group(0) @binding(0)
 var tex_rgba: texture_2d<f32>;
 
+//@group(0) @binding(1)
+//var tex_y: texture_storage_2d<r32float, write>;
+
 @group(0) @binding(1)
-var tex_y: texture_storage_2d<r32float, write>;
+var<storage, read_write> dct_out: array<f32>;
+
+@group(0) @binding(2)
+var<storage, read_write> n_non_zeros: array<u32>;
+
+//@group(0) @binding(2)
+//var<storage, read_write> rle_value: array<i32>;
+//
+//@group(0) @binding(3)
+//var<storage, read_write> rle_preceding_zeros: array<u32>;
+
 
 const LUMA_WEIGHTS = vec4f(0.299, 0.587, 0.114, 0);
 
@@ -103,6 +116,18 @@ const ZZ_INDEX = array<vec2u, 64>(
 );
 
 
+const QTABLE_MEDIUM_GRAY = array<f32, 64>(
+    16, 12, 11, 10, 12, 14, 14, 13,
+    14, 16, 24, 19, 16, 17, 18, 24,
+    22, 22, 24, 26, 40, 51, 58, 40,
+    29, 37, 35, 49, 72, 64, 55, 56,
+    51, 57, 60, 61, 55, 69, 87, 68,
+    64, 78, 92, 95, 87, 81, 109, 80,
+    56, 62, 103, 104, 103, 98, 112, 121,
+    113, 77, 92, 120, 100, 103, 101, 99
+);
+
+
 var<workgroup> wg_mem: array<f32, 64>;
 
 
@@ -111,13 +136,17 @@ fn main(
     @builtin(workgroup_id) wid: vec3<u32>,
     @builtin(local_invocation_id) lid: vec3<u32>
 ) {
-    let flat_id = lid.y * 8u + lid.x;
+    let flat_lid = lid.y * 8u + lid.x;
+
+    // flat index of this block within the full image
+    let block_index = wid.y * 8u * 8u + wid.x;
+
     let start = wid.xy * vec2u(8, 8);
 
     let pixel_pos = start + lid.xy;
     let rgba_val = textureLoad(tex_rgba, pixel_pos, 0);
     let luma = (dot(rgba_val, LUMA_WEIGHTS) - 0.5) * 255.0;
-    wg_mem[flat_id] = luma;
+    wg_mem[flat_lid] = luma;
 
     workgroupBarrier();
 
@@ -300,10 +329,84 @@ fn main(
 
     workgroupBarrier();
 
-    let basis_weight_output_pos = ZZ_INDEX[flat_id];
-    let transpose_index = basis_weight_output_pos.y * 8u + basis_weight_output_pos.x;
-    let dct_value = wg_mem[transpose_index];
+//    let basis_weight_output_pos = ZZ_INDEX[flat_lid];
+//    let transpose_index = basis_weight_output_pos.y * 8u + basis_weight_output_pos.x;
+//    let dct_value = wg_mem[transpose_index];
 
-    let output_pos = (wid.xy * 8u) + basis_weight_output_pos;
-    textureStore(tex_y, output_pos, vec4f(dct_value, 0.0, 0.0, 0.0));
+    workgroupBarrier();
+
+    // Do RLE for this block
+    // Store total RLE length in a shared storage buffer of length n_image_blocks
+    // wait for the length of the previous block to be > 0
+
+    // Two storage buffers
+    // One stores RLE
+    // Another is of length n_image_blocks and stores the number of RLE elements for each block
+
+    // for now use only 1 invocations for RLE
+    if lid.x > 0 {
+        return;
+    }
+    if lid.y > 0 {
+        return;
+    }
+
+    var rle_length_block: u32 = 0u;
+
+//    if block_index > 0 {
+//        // cumulative RLE length
+//        while rle_length[block_index - 1] == 0u {
+//            // pause
+//        }
+////        rle_start_pos = rle_length[block_index - 1];
+//    }
+//    else {
+//        rle_start_pos = 0u;
+//    }
+
+//    rle_start_pos = block_index * 64u;
+
+    // RLE encode
+
+    var basis_weight_output_pos: vec2u;
+    var transpose_index: u32;
+    var dct_value: f32;
+
+//    var zero_counter: u32 = 0;
+
+    let dct_out_start_index: u32 = block_index * 64u;
+
+    for (var basis_index: u32 = 0u; basis_index < 64u; basis_index++) {
+        basis_weight_output_pos = ZZ_INDEX[basis_index];
+        transpose_index = basis_weight_output_pos.y * 8u + basis_weight_output_pos.x;
+        dct_value = wg_mem[transpose_index] / QTABLE_MEDIUM_GRAY[transpose_index];
+
+        // write DCT output
+        dct_out[dct_out_start_index] = dct_value;
+        dct_out_start_index++;
+
+        if dct_value > 1 {
+//            zero_counter = 0u;
+            rle_length_block++;
+        }
+//        else {
+////            rle_length_block++;
+//        }
+    }
+
+//    if zero_counter == 64 {
+//        rle_value[rle_start_pos] = 0;
+//        rle_preceding_zeros[rle_start_pos] = 63u;
+//        rle_start_pos++;
+//    }
+
+
+    storageBarrier();
+
+    // RLE length for this block index
+    n_non_zeros[block_index] = rle_length_block;
+
+
+//    let output_pos = (wid.xy * 8u) + basis_weight_output_pos;
+//    textureStore(tex_y, output_pos, vec4f(dct_value, 0.0, 0.0, 0.0));
 }

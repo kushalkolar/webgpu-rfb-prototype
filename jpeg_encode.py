@@ -146,12 +146,22 @@ texture_dct_basis = Texture(
 )
 
 
-dct_buffer = StorageBuffer(dct_basis)
+# dct_buffer = StorageBuffer(dct_basis)
 
+n_image_blocks = int(np.prod(image_rgba.shape[:2]) / (8 * 8))
 
-resources_to_ycbcr = [
+dct_output = StorageBuffer(np.zeros(n_image_blocks * 64, dtype=np.float32), usage_flags=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_SRC)
+n_non_zeros = StorageBuffer(np.zeros(n_image_blocks, dtype=np.uint32), usage_flags=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_SRC)
+rle_value = StorageBuffer(np.zeros(n_image_blocks * 64, dtype=np.int32), usage_flags=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_SRC)
+rle_preceding_zeros = StorageBuffer(np.zeros(n_image_blocks * 64, dtype=np.uint32), usage_flags=wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_SRC)
+
+resources_dct = [
     texture_rgba,
-    texture_y,
+    # texture_y,
+    dct_output,
+    n_non_zeros,
+    # rle_value,
+    # rle_preceding_zeros,
     # dct_buffer,
     # texture_cbcr.texture.create_view(),
     # chroma_sampler,
@@ -159,18 +169,18 @@ resources_to_ycbcr = [
 
 #%% visualization
 
-Y = texture_y_dct.read()
-CbCr = texture_cbcr.read()
-
-iw = fpl.ImageWidget(
-    [Y, CbCr[..., 0], CbCr[..., 1]],
-    names=["Y", "Cb", "Cr"],
-    figure_shape=(3, 1),
-    figure_kwargs={"size": (900, 1800), "controller_ids": None, "canvas": "qt"},
-    cmap="viridis",
-)
-
-iw.show()
+# Y = texture_y_dct.read()
+# CbCr = texture_cbcr.read()
+#
+# iw = fpl.ImageWidget(
+#     [Y, CbCr[..., 0], CbCr[..., 1]],
+#     names=["Y", "Cb", "Cr"],
+#     figure_shape=(3, 1),
+#     figure_kwargs={"size": (900, 1800), "controller_ids": None, "canvas": "qt"},
+#     cmap="viridis",
+# )
+#
+# iw.show()
 
 MULTIPASS: MultiPass = None
 
@@ -185,14 +195,14 @@ def create_multipass(shader_path, workgroups):
 
     MULTIPASS.add(
         name="ycbcr",
-        resources=resources_to_ycbcr,
+        resources=resources_dct,
         shader_path=shader_path,
         workgroups=workgroups,
         templating_values=templating_dct_step,
     )
 
 create_multipass(
-    "./aan_dct2.wgsl",
+    "./aan_dct.wgsl",
     workgroups=(int(64 * RIF), int(64 * RIF), 1)
 )
 
@@ -204,9 +214,9 @@ def run_shader():
     Y = texture_y.read()
     CbCr = texture_cbcr.read()
 
-    iw.set_data([Y, CbCr[..., 0], CbCr[..., 1]])
+    # iw.set_data([Y, CbCr[..., 0], CbCr[..., 1]])
 
-iw.figure.show_tooltips = True
+# iw.figure.show_tooltips = True
 
 
 class GUI(EdgeWindow):
@@ -218,13 +228,23 @@ class GUI(EdgeWindow):
             run_shader()
 
 
-iw.figure.add_gui(GUI(iw.figure))
+# iw.figure.add_gui(GUI(iw.figure))
 
 run_shader()
 fpl.loop.run()
 
-stats = MULTIPASS.run_stats(n=2000)
+stats = MULTIPASS.run_stats(n=10)
 # print("nvidia RTX 3080, 8k")
 # print("nvidia RTX 3080, 4k")
 print(f"\tmean: {stats.mean():0.3f} ms")
 print(f"\tmedian: {np.median(stats):0.3f} ms")
+
+rle_length_array = np.frombuffer(DEVICE.queue.read_buffer(n_non_zeros.buffer).cast("I"), dtype=np.uint32)
+rle_value_array = np.frombuffer(DEVICE.queue.read_buffer(rle_value.buffer).cast("i"), dtype=np.uint32)
+rle_preceding_zeros_array = np.frombuffer(DEVICE.queue.read_buffer(rle_preceding_zeros.buffer).cast("I"), dtype=np.uint32)
+
+print(rle_length_array)
+print(rle_value_array)
+print(rle_preceding_zeros_array)
+# print(DEVICE.queue.read_buffer(rle_length_buffer).cast("I"))
+#
