@@ -7,6 +7,21 @@ import wgpu
 DEVICE: wgpu.GPUDevice = wgpu.utils.get_default_device()
 
 
+def make_device(adapter_index: int) -> wgpu.GPUDevice:
+    """Create a wgpu device by selecting the adapter at ``adapter_index`` from
+    ``wgpu.gpu.enumerate_adapters_sync()``. Useful on machines with multiple
+    GPUs. The module-level ``DEVICE`` is replaced so ``Texture`` and
+    ``StorageBuffer`` use the same device.
+    """
+    global DEVICE
+
+    adapters = wgpu.gpu.enumerate_adapters_sync()
+    adapter = adapters[adapter_index]
+    DEVICE = adapter.request_device_sync()
+
+    return DEVICE
+
+
 def size_from_shape(shape, dim):
     # copied from pygfx
     # Check if shape matches dimension
@@ -109,6 +124,24 @@ class Texture:
         ).cast("f")
 
         return np.frombuffer(buffer, dtype=np.float32).reshape(self._shape)
+
+
+class StorageBuffer:
+    def __init__(
+            self,
+            data: np.ndarray,
+            usage_flags: int = wgpu.BufferUsage.STORAGE | wgpu.BufferUsage.COPY_SRC,
+            label: str = "",
+    ):
+        self._buffer = DEVICE.create_buffer_with_data(
+            label=label,
+            data=data,
+            usage=usage_flags,
+        )
+
+    @property
+    def buffer(self) -> wgpu.GPUBuffer:
+        return self._buffer
 
 
 def make_bindings(resources) -> list[dict]:
