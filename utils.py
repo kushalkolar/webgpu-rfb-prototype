@@ -4,7 +4,7 @@ import numpy as np
 import wgpu
 
 
-DEVICE: wgpu.GPUDevice = wgpu.utils.get_default_device()
+DEVICE: wgpu.GPUDevice = None
 
 
 def make_device(adapter_index: int) -> wgpu.GPUDevice:
@@ -17,7 +17,18 @@ def make_device(adapter_index: int) -> wgpu.GPUDevice:
 
     adapters = wgpu.gpu.enumerate_adapters_sync()
     adapter = adapters[adapter_index]
-    DEVICE = adapter.request_device_sync()
+
+    requested = []
+    if "timestamp-query" in adapter.features:
+        requested.append("timestamp-query")
+
+    wgpu.utils.preconfigure_default_device(
+        caller_info="webgpu_rfb_prototype",
+        adapter=adapter,
+        required_features=requested,
+    )
+
+    DEVICE = wgpu.utils.get_default_device()
 
     return DEVICE
 
@@ -148,11 +159,13 @@ def make_bindings(resources) -> list[dict]:
     bindings = list()
 
     for i, r in enumerate(resources):
-        bindings.append(
-            {
-                "binding": i,
-                "resource": r,
-            }
-        )
+        if isinstance(r, Texture):
+            resource = r.texture.create_view()
+        elif isinstance(r, StorageBuffer):
+            resource = {"buffer": r.buffer, "offset": 0, "size": r.buffer.size}
+        else:
+            resource = r
+
+        bindings.append({"binding": i, "resource": resource})
 
     return bindings
